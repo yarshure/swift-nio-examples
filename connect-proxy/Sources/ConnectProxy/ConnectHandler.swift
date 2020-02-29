@@ -19,12 +19,13 @@ import Logging
 
 final class ConnectHandler {
     private var upgradeState: State
-
+    private var connectType:ConnectType = .http
     private var logger: Logger
-
+    private var reqHeader:HTTPRequestHead?
     init(logger: Logger) {
         self.upgradeState = .idle
         self.logger = logger
+        
     }
 }
 
@@ -38,6 +39,10 @@ extension ConnectHandler {
         case upgradeComplete(pendingBytes: [NIOAny])
         case upgradeFailed
     }
+    fileprivate enum ConnectType {
+        case http   //normal GET/POST
+        case https //CONNECT
+    }
 }
 
 
@@ -46,6 +51,7 @@ extension ConnectHandler: ChannelInboundHandler {
     typealias OutboundOut = HTTPServerResponsePart
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        print(data)
         switch self.upgradeState {
         case .idle:
             self.handleInitialMessage(context: context, data: self.unwrapInboundIn(data))
@@ -117,7 +123,7 @@ extension ConnectHandler: RemovableChannelHandler {
 
 extension ConnectHandler {
     private func handleInitialMessage(context: ChannelHandlerContext, data: InboundIn) {
-        guard case .head(let head) = data else {
+        guard case .head(var head) = data else {
             self.logger.error("Invalid HTTP message type \(data)")
             self.httpErrorAndClose(context: context)
             return
@@ -125,18 +131,39 @@ extension ConnectHandler {
 
         self.logger.info("\(head.method) \(head.uri) \(head.version)")
 
-        guard head.method == .CONNECT else {
-            self.logger.error("Invalid HTTP method: \(head.method)")
-            self.httpErrorAndClose(context: context)
-            return
+     
+
+       
+
+        //stand http proxy
+        //Invalid HTTP method Invalid HTTP method: GET
+        if head.method == .CONNECT {
+              // Port 80 if not specified
+            guard let connectInfo = head.hostPort(connect: true) else {
+                //when fail,need close channel
+                     self.logger.error("Invalid HTTP  \(head.uri)")
+                     self.httpErrorAndClose(context: context)
+                return
+            }
+            self.connectType = .https
+            self.upgradeState = .beganConnecting
+            self.connectTo(host: connectInfo.0, port: connectInfo.1, context: context)
+        }else {
+            //need updat uri?
+            guard let connectInfo = head.hostPort(connect: false) else {
+                self.logger.error("Invalid HTTP  \(head.headers)")
+                self.httpErrorAndClose(context: context)
+                return
+            }
+            self.upgradeState = .beganConnecting
+            self.connectTo(host: connectInfo.0, port: connectInfo.1, context: context)
+            //update uri
+            head.uri = head.shortUri
+            self.reqHeader = head
+            
         }
+     
 
-        let components = head.uri.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-        let host = components.first!  // There will always be a first.
-        let port = components.last.flatMap { Int($0, radix: 10) } ?? 80  // Port 80 if not specified
-
-        self.upgradeState = .beganConnecting
-        self.connectTo(host: String(host), port: port, context: context)
     }
 
     private func connectTo(host: String, port: Int, context: ChannelHandlerContext) {
@@ -155,6 +182,7 @@ extension ConnectHandler {
 
     private func connectSucceeded(channel: Channel, context: ChannelHandlerContext) {
         self.logger.info("Connected to \(String(describing: channel.remoteAddress))")
+
 
         switch self.upgradeState {
         case .beganConnecting:
@@ -194,11 +222,50 @@ extension ConnectHandler {
         // Ok, upgrade has completed! We now need to begin the upgrade process.
         // First, send the 200 message.
         // This content-length header is MUST NOT, but we need to workaround NIO's insistence that we set one.
-        let headers = HTTPHeaders([("Content-Length", "0")])
-        let head = HTTPResponseHead(version: .init(major: 1, minor: 1), status: .ok, headers: headers)
-        context.write(self.wrapOutboundOut(.head(head)), promise: nil)
-        context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+        
 
+        if connectType == .https {
+            let headers = HTTPHeaders([("Content-Length", "0")])
+            let head = HTTPResponseHead(version: .init(major: 1, minor: 1), status: .ok, headers: headers)
+            context.write(self.wrapOutboundOut(.head(head)), promise: nil)
+            context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+        }else {
+           // send http header to real server
+            if let head = reqHeader   {
+                                //let part = HTTPPart
+                    var buf = ByteBufferAllocator().buffer(capacity: 1024)
+                    buf.writeString(head.genData())
+                    for header in head.headers {
+                            buf.writeString(header.0)
+                            buf.writeStaticString(": ")
+                            buf.writeString(header.1)
+                            buf.writeStaticString("\r\n")
+                    }
+                    buf.writeStaticString("\r\n")
+                    let data = NIOAny.init( buf)
+                peerChannel.pipeline.write(data, promise: nil)
+                
+                //peerChannel.pipeline.writeAndFlush
+                    //self.reqHeader = nil
+//                    switch self.upgradeState {
+//                    case .idle,.beganConnecting,.awaitingEnd:
+//                        break
+//
+//                    case .awaitingConnection(var pendingBytes),.upgradeComplete(pendingBytes: var pendingBytes):
+//
+//                        self.upgradeState = .upgradeComplete(pendingBytes: [])
+//                        pendingBytes.append(data)
+//                        self.upgradeState = .upgradeComplete(pendingBytes: pendingBytes)
+//
+//
+//
+//                    case .upgradeFailed:
+//                        break
+//                }
+            }
+                
+           
+        }
         // Now remove the HTTP encoder.
         self.removeEncoder(context: context)
 
