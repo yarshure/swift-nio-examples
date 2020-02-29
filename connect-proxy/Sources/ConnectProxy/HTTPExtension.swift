@@ -42,7 +42,7 @@ extension HTTPRequestHead{
     }
     func genData() ->String{
       
-        let  result:String = "\(method.rawValue) \(uri) \(version.major)/\(version.minor)\r\n"
+        let  result:String = "\(method.rawValue) \(uri) HTTP/\(version.major).\(version.minor)\r\n"
        return result
     }
 }

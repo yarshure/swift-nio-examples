@@ -41,6 +41,7 @@ extension GlueHandler {
 
 extension GlueHandler {
     private func partnerWrite(_ data: NIOAny) {
+        print(data,#function)
         self.context?.write(data, promise: nil)
     }
 
@@ -84,6 +85,7 @@ extension GlueHandler: ChannelDuplexHandler {
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        print(data,#function)
         self.partner?.partnerWrite(data)
     }
 

@@ -234,34 +234,21 @@ extension ConnectHandler {
             if let head = reqHeader   {
                                 //let part = HTTPPart
                     var buf = ByteBufferAllocator().buffer(capacity: 1024)
+                   
                     buf.writeString(head.genData())
                     for header in head.headers {
+                        if header.0 !=  "Proxy-Connection" {
                             buf.writeString(header.0)
                             buf.writeStaticString(": ")
                             buf.writeString(header.1)
                             buf.writeStaticString("\r\n")
+                        }
+                            
                     }
                     buf.writeStaticString("\r\n")
                     let data = NIOAny.init( buf)
-                peerChannel.pipeline.write(data, promise: nil)
-                
-                //peerChannel.pipeline.writeAndFlush
-                    //self.reqHeader = nil
-//                    switch self.upgradeState {
-//                    case .idle,.beganConnecting,.awaitingEnd:
-//                        break
-//
-//                    case .awaitingConnection(var pendingBytes),.upgradeComplete(pendingBytes: var pendingBytes):
-//
-//                        self.upgradeState = .upgradeComplete(pendingBytes: [])
-//                        pendingBytes.append(data)
-//                        self.upgradeState = .upgradeComplete(pendingBytes: pendingBytes)
-//
-//
-//
-//                    case .upgradeFailed:
-//                        break
-//                }
+                    self.upgradeState = .upgradeComplete(pendingBytes: [data])
+                self.reqHeader = nil
             }
                 
            
